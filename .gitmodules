@@ -1,0 +1,3 @@
+[submodule "lib/NtpClient"]
+	path = lib/NtpClient
+	url = https://github.com/DaveRichmond/NtpClient

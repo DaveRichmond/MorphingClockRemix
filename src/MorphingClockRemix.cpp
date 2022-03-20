@@ -5,13 +5,11 @@ follow the great tutorial there and eventually use this code as alternative
 provided 'AS IS', use at your own risk
  * mirel.t.lazar@gmail.com
  */
+#include <Arduino.h>
 
 #include <TimeLib.h>
 #include <NtpClientLib.h>
-#include <ESP8266WiFi.h>
-
-#define double_buffer
-#include <PxMatrix.h>
+#include <SPIFFS.h>
 
 //#define USE_ICONS
 //#define USE_FIREWORKS
@@ -21,14 +19,15 @@ provided 'AS IS', use at your own risk
 //#include <Fonts/FreeMono9pt7b.h>
 
 //=== WIFI MANAGER ===
-#include <DNSServer.h>
-#include <ESP8266WebServer.h>
-#include <WiFiManager.h> //https://github.com/tzapu/WiFiManager
-char wifiManagerAPName[] = "MorphClk";
-char wifiManagerAPPassword[] = "MorphClk";
+//#include <DNSServer.h>
+//#include <ESP8266WebServer.h>
+#include <ESP_WiFiManager.h> //https://github.com/tzapu/WiFiManager
+String wifiManagerAPName = "MorphClk";
+String wifiManagerAPPassword = "MorphClk";
 
 //== DOUBLE-RESET DETECTOR ==
-#include <DoubleResetDetector.h>
+#define DOUBLERESETDETECTOR_DEBUG       true
+#include <ESP_DoubleResetDetector.h>
 #define DRD_TIMEOUT 10 // Second-reset must happen within 10 seconds of first reset to be considered a double-reset
 #define DRD_ADDRESS 0 // RTC Memory Address for the DoubleResetDetector to use
 DoubleResetDetector drd(DRD_TIMEOUT, DRD_ADDRESS);
@@ -45,60 +44,65 @@ void saveConfigCallback ()
   shouldSaveConfig = true;
 }
 
-#ifdef ESP8266
-#include <Ticker.h>
-Ticker display_ticker;
-#define P_LAT 16
-#define P_A 5
-#define P_B 4
-#define P_C 15
-#define P_D 12
-#define P_E 0
-#define P_OE 2
-#endif
+#include "Project_Matrix.h"
 
-// Pins for LED MATRIX
-PxMATRIX display(64, 32, P_LAT, P_OE, P_A, P_B, P_C, P_D, P_E);
+SMARTMATRIX_ALLOCATE_BUFFERS(matrix, kMatrixWidth, kMatrixHeight, kRefreshDepth, kDmaBufferRows, kPanelType, kMatrixOptions);
+SMARTMATRIX_ALLOCATE_BACKGROUND_LAYER(backgroundLayer, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kBackgroundLayerOptions);
+
+
 
 //=== SEGMENTS ===
 int cin = 25; //color intensity
 #include "Digit.h"
-Digit digit0(&display, 0, 63 - 1 - 9*1, 8, display.color565(0, 0, 255));
-Digit digit1(&display, 0, 63 - 1 - 9*2, 8, display.color565(0, 0, 255));
-Digit digit2(&display, 0, 63 - 4 - 9*3, 8, display.color565(0, 0, 255));
-Digit digit3(&display, 0, 63 - 4 - 9*4, 8, display.color565(0, 0, 255));
-Digit digit4(&display, 0, 63 - 7 - 9*5, 8, display.color565(0, 0, 255));
-Digit digit5(&display, 0, 63 - 7 - 9*6, 8, display.color565(0, 0, 255));
-
-#ifdef ESP8266
-// ISR for display refresh
-void display_updater ()
-{
-  //display.displayTestPattern(70);
-  display.display (70);
-}
-#endif
+Digit digit0(&backgroundLayer, 0, 63 - 1 - 9*1, 8, backgroundLayer.color565(0, 0, 255));
+Digit digit1(&backgroundLayer, 0, 63 - 1 - 9*2, 8, backgroundLayer.color565(0, 0, 255));
+Digit digit2(&backgroundLayer, 0, 63 - 4 - 9*3, 8, backgroundLayer.color565(0, 0, 255));
+Digit digit3(&backgroundLayer, 0, 63 - 4 - 9*4, 8, backgroundLayer.color565(0, 0, 255));
+Digit digit4(&backgroundLayer, 0, 63 - 7 - 9*5, 8, backgroundLayer.color565(0, 0, 255));
+Digit digit5(&backgroundLayer, 0, 63 - 7 - 9*6, 8, backgroundLayer.color565(0, 0, 255));
 
 void getWeather ();
 
-void configModeCallback (WiFiManager *myWiFiManager) 
+#include "TinyFont.h"
+const byte row0 = 2+0*10;
+const byte row1 = 2+1*10;
+const byte row2 = 2+2*10;
+void configModeCallback (ESP_WiFiManager *myWiFiManager) 
 {
   Serial.println ("Entered config mode");
-  Serial.println (WiFi.softAPIP());
+  //Serial.println (WiFi.softAPIP());
+  myWiFiManager->startConfigPortal();
 
   // You could indicate on your screen or by an LED you are in config mode here
+  backgroundLayer.setCursor (0, row0);
+  backgroundLayer.print ("AP:");
+  backgroundLayer.print (myWiFiManager->getConfigPortalSSID());
+
+  backgroundLayer.setCursor (0, row1);
+  backgroundLayer.print ("Pw:");
+  backgroundLayer.print (myWiFiManager->getConfigPortalPW());
+
+  WiFi_AP_IPConfig ap_config;
+  myWiFiManager->getAPStaticIPConfig(ap_config);
+  backgroundLayer.setCursor (0, row2);
+  backgroundLayer.print (String(ap_config._ap_static_ip));
+  
+  backgroundLayer.fillScreen (backgroundLayer.color565(0, 0, 0));
 
   // We don't want the next time the boar resets to be considered a double reset
   // so we remove the flag
   drd.stop ();
 }
 
-char timezone[5] = "0";
-char military[3] = "Y";     // 24 hour mode? Y/N
-char u_metric[3] = "Y";     // use metric for units? Y/N
-char date_fmt[7] = "D.M.Y"; // date format: D.M.Y or M.D.Y or M.D or D.M or D/M/Y.. looking for trouble
-bool loadConfig () 
-{
+//char timezone[5] = "0";
+//har military[3] = "Y";     // 24 hour mode? Y/N
+//char u_metric[3] = "Y";     // use metric for units? Y/N
+//char date_fmt[7] = "D.M.Y"; // date format: D.M.Y or M.D.Y or M.D or D.M or D/M/Y.. looking for trouble
+String timezone = "0";
+String military = "Y";
+String u_metric = "Y";
+String date_fmt = "D.M.Y";
+bool loadConfig (){
   File configFile = SPIFFS.open ("/config.json", "r");
   if (!configFile) 
   {
@@ -107,8 +111,7 @@ bool loadConfig ()
   }
 
   size_t size = configFile.size ();
-  if (size > 1024) 
-  {
+  if (size > 1024) {
     Serial.println("Config file size is too large");
     return false;
   }
@@ -118,29 +121,28 @@ bool loadConfig ()
 
   configFile.readBytes (buf.get(), size);
 
-  StaticJsonBuffer<200> jsonBuffer;
-  JsonObject& json = jsonBuffer.parseObject(buf.get());
-
-  if (!json.success ()) 
-  {
+  StaticJsonDocument<1024> doc;
+  DeserializationError error = deserializeJson(doc, buf.get());
+  if (error) {
     Serial.println("Failed to parse config file");
     return false;
   }
 
-  strcpy (timezone, json["timezone"]);
-  strcpy (military, json["military"]);
-  //avoid reboot loop on systems where this is not set
-  if (json.get<const char*>("metric"))
-    strcpy (u_metric, json["metric"]);
-  else
-  {
-    Serial.println ("metric units not set, using default: Y");
+  if(doc["timezone"]){
+    //strncpy(timezone, doc["timezone"], 5);
+    timezone = doc["timezone"].as<String>();
   }
-  if (json.get<const char*>("date-format"))
-    strcpy (date_fmt, json["date-format"]);
-  else
-  {
-    Serial.println ("date format not set, using default: D.M.Y");
+  if(doc["military"]){
+    //strncpy(military, doc["military"], 3);
+    military = doc["military"].as<String>();
+  }
+  if(doc["metric"]){
+    //strncpy(u_metric, doc["metric"], 3);
+    u_metric = doc["metric"].as<String>();
+  }
+  if(doc["date-format"]){
+    //strncpy(date_fmt, doc["date-format"], 7);
+    date_fmt = doc["date-format"].as<String>();
   }
   
   return true;
@@ -148,9 +150,8 @@ bool loadConfig ()
 
 bool saveConfig () 
 {
-  StaticJsonBuffer<200> jsonBuffer;
-  JsonObject& json = jsonBuffer.createObject();
-  json["timezone"] = timezone;
+  StaticJsonDocument<200> json;
+  json["timezone"] =  timezone;
   json["military"] = military;
   json["metric"] = u_metric;
   json["date-format"] = date_fmt;
@@ -163,69 +164,59 @@ bool saveConfig ()
   }
 
   Serial.println ("Saving configuration to file:");
-  Serial.print ("timezone=");
-  Serial.println (timezone);
-  Serial.print ("military=");
-  Serial.println (military);
-  Serial.print ("metric=");
-  Serial.println (u_metric);
-  Serial.print ("date-format=");
-  Serial.println (date_fmt);
-
-  json.printTo (configFile);
+  serializeJson(json, configFile);
+  //json.printTo (configFile);
   return true;
 }
 
-#include "TinyFont.h"
-const byte row0 = 2+0*10;
-const byte row1 = 2+1*10;
-const byte row2 = 2+2*10;
 void wifi_setup ()
 {
+  bool initial_config = false;
+
   //-- Config --
   if (!SPIFFS.begin ()) 
   {
-    Serial.println ("Failed to mount FS");
-    return;
+    Serial.println ("Failed to mount FS, formatting SPIFFS");
+    SPIFFS.format();
+    initial_config = true;
+  } else {
+    if(!loadConfig ()){
+      initial_config = true;
+    }
   }
-  loadConfig ();
 
   //-- Display --
-  display.fillScreen (display.color565 (0, 0, 0));
-  display.setTextColor (display.color565 (0, 0, 255));
+  backgroundLayer.fillScreen (backgroundLayer.color565 (0, 0, 0));
+  backgroundLayer.setTextColor (backgroundLayer.color565 (0, 0, 255));
 
   //-- WiFiManager --
   //Local intialization. Once its business is done, there is no need to keep it around
-  WiFiManager wifiManager;
+  ESP_WiFiManager wifiManager;
   wifiManager.setSaveConfigCallback (saveConfigCallback);
-  WiFiManagerParameter timeZoneParameter ("timeZone", "Time Zone", timezone, 5); 
+  ESP_WMParameter timeZoneParameter ("timeZone", "Time Zone", timezone.c_str(), 5); 
   wifiManager.addParameter (&timeZoneParameter);
-  WiFiManagerParameter militaryParameter ("military", "24Hr (Y/N)", military, 3); 
+  ESP_WMParameter militaryParameter ("military", "24Hr (Y/N)", military.c_str(), 3); 
   wifiManager.addParameter (&militaryParameter);
-  WiFiManagerParameter metricParameter ("metric", "Metric Units (Y/N)", u_metric, 3); 
+  ESP_WMParameter metricParameter ("metric", "Metric Units (Y/N)", u_metric.c_str(), 3); 
   wifiManager.addParameter (&metricParameter);
-  WiFiManagerParameter dmydateParameter ("date_fmt", "Date Format (D.M.Y)", date_fmt, 6); 
+  ESP_WMParameter dmydateParameter ("date_fmt", "Date Format (D.M.Y)", date_fmt.c_str(), 6); 
   wifiManager.addParameter (&dmydateParameter);
 
+  if(wifiManager.WiFi_SSID().isEmpty()){
+    Serial.println("No WiFi SSID Set! Initial configuration mode");
+    initial_config = true;
+  }
   //-- Double-Reset --
-  if (drd.detectDoubleReset ()) 
-  {
+  if (drd.detectDoubleReset ()) {
     Serial.println ("Double Reset Detected");
+    initial_config = true;
+  }
 
-    display.setCursor (0, row0);
-    display.print ("AP:");
-    display.print (wifiManagerAPName);
+  if(initial_config){
+    Serial.println("Initial configuration mode!");
 
-    display.setCursor (0, row1);
-    display.print ("Pw:");
-    display.print (wifiManagerAPPassword);
+    wifiManager.startConfigPortal (wifiManagerAPName.c_str(), wifiManagerAPPassword.c_str());
 
-    display.setCursor (0, row2);
-    display.print ("192.168.4.1");
-
-    wifiManager.startConfigPortal (wifiManagerAPName, wifiManagerAPPassword);
-
-    display.fillScreen (display.color565(0, 0, 0));
   } 
   else 
   {
@@ -233,12 +224,12 @@ void wifi_setup ()
 
     //display.setCursor (2, row1);
     //display.print ("connecting");
-    TFDrawText (&display, String("   CONNECTING   "), 0, 13, display.color565(0, 0, 255));
+    TFDrawText (&backgroundLayer, String("   CONNECTING   "), 0, 13, backgroundLayer.color565(0, 0, 255));
 
     //fetches ssid and pass from eeprom and tries to connect
     //if it does not connect it starts an access point with the specified name wifiManagerAPName
     //and goes into a blocking loop awaiting configuration
-    wifiManager.autoConnect (wifiManagerAPName);
+    wifiManager.autoConnect();
   }
   
   Serial.print ("timezone=");
@@ -250,28 +241,32 @@ void wifi_setup ()
   Serial.print ("date-format=");
   Serial.println (date_fmt);
   //timezone
-  strcpy (timezone, timeZoneParameter.getValue ());
+  timezone = String(timeZoneParameter.getValue());
+  //strcpy (timezone, timeZoneParameter.getValue ());
   //military time
-  strcpy (military, militaryParameter.getValue ());
+  military = militaryParameter.getValue();
+  //strcpy (military, militaryParameter.getValue ());
   //metric units
-  strcpy (u_metric, metricParameter.getValue ());
+  u_metric = metricParameter.getValue();
+  //strcpy (u_metric, metricParameter.getValue ());
   //date format
-  strcpy (date_fmt, dmydateParameter.getValue ());
+  date_fmt = dmydateParameter.getValue();
+  //strcpy (date_fmt, dmydateParameter.getValue ());
   //display.fillScreen (0);
   //display.setCursor (2, row1);
-  TFDrawText (&display, String("     ONLINE     "), 0, 13, display.color565(0, 0, 255));
+  TFDrawText (&backgroundLayer, String("     ONLINE     "), 0, 13, backgroundLayer.color565(0, 0, 255));
   Serial.print ("WiFi connected, IP address: ");
   Serial.println (WiFi.localIP ());
   //
   //start NTP
-  NTP.begin ("pool.ntp.org", String(timezone).toInt(), false);
+  NTP.begin ("pool.ntp.org", timezone.toInt(), false);
   NTP.setInterval (10);//force rapid sync in 10sec
 
   if (shouldSaveConfig) 
   {
-    saveConfig ();
+    saveConfig();
   }
-  drd.stop ();
+  //drd.stop ();
   
   //delay (1500);
   getWeather ();
@@ -286,10 +281,13 @@ void setup()
 {	
 	Serial.begin (115200);
   //display setup
-  display.begin (16);
-#ifdef ESP8266
-  display_ticker.attach (0.002, display_updater);
-#endif
+
+  matrix.addLayer(&backgroundLayer);
+  matrix.begin();
+
+  matrix.setBrightness(defaultBrightness);
+  backgroundLayer.enableColorCorrection(true);
+
   //
   wifi_setup ();
   //
@@ -311,8 +309,8 @@ void setup()
 		}
 	});
   //prep screen for clock display
-  display.fillScreen (0);
-  int cc_gry = display.color565 (128, 128, 128);
+  backgroundLayer.fillScreen (0);
+  int cc_gry = backgroundLayer.color565 (128, 128, 128);
   //reset digits color
   digit0.SetColor (cc_gry);
   digit1.SetColor (cc_gry);
@@ -324,9 +322,9 @@ void setup()
   digit3.DrawColon (cc_gry);
   //
   Serial.print ("display color range [");
-  Serial.print (display.color565 (0, 0, 0));
+  Serial.print (backgroundLayer.color565 (0, 0, 0));
   Serial.print (" .. ");
-  Serial.print (display.color565 (255, 255, 255));
+  Serial.print (backgroundLayer.color565 (255, 255, 255));
   Serial.println ("]");
   //
 }
@@ -361,7 +359,7 @@ void getWeather ()
     client.print ("q="+location); 
     client.print ("&appid="+apiKey); 
     client.print ("&cnt=1"); 
-    (*u_metric=='Y')?client.println ("&units=metric"):client.println ("&units=imperial");
+    (u_metric.equalsIgnoreCase("Y"))?client.println ("&units=metric"):client.println ("&units=imperial");
     client.println ("Host: api.openweathermap.org"); 
     client.println ("Connection: close");
     client.println (); 
@@ -787,26 +785,26 @@ if (condM == 0 && daytime)
   xo = 3*TF_COLS; yo = 1;
   Serial.print ("!weather condition icon unknown, show: ");
   Serial.println (condS);
-  int cc_dgr = display.color565 (30, 30, 30);
+  int cc_dgr = backgroundLayer.color565 (30, 30, 30);
   //draw the first 5 letters from the unknown weather condition
   String lstr = condS.substring (0, (condS.length () > 5?5:condS.length ()));
   lstr.toUpperCase ();
-  TFDrawText (&display, lstr, xo, yo, cc_dgr);
+  TFDrawText (&backgroundLayer, lstr, xo, yo, cc_dgr);
 #endif
 }
 
 void draw_weather ()
 {
-  int cc_wht = display.color565 (cin, cin, cin);
-  int cc_red = display.color565 (cin, 0, 0);
-  int cc_grn = display.color565 (0, cin, 0);
-  int cc_blu = display.color565 (0, 0, cin);
+  int cc_wht = backgroundLayer.color565 (cin, cin, cin);
+  int cc_red = backgroundLayer.color565 (cin, 0, 0);
+  int cc_grn = backgroundLayer.color565 (0, cin, 0);
+  int cc_blu = backgroundLayer.color565 (0, 0, cin);
   //int cc_ylw = display.color565 (cin, cin, 0);
   //int cc_gry = display.color565 (128, 128, 128);
-  int cc_dgr = display.color565 (30, 30, 30);
+  int cc_dgr = backgroundLayer.color565 (30, 30, 30);
   Serial.println ("showing the weather");
   xo = 0; yo = 1;
-  TFDrawText (&display, String("                "), xo, yo, cc_dgr);
+  TFDrawText (&backgroundLayer, String("                "), xo, yo, cc_dgr);
   if (tempM == -10000 || humiM == -10000 || presM == -10000)
   {
     //TFDrawText (&display, String("NO WEATHER DATA"), xo, yo, cc_dgr);
@@ -817,8 +815,7 @@ void draw_weather ()
     //weather below the clock
     //-temperature
     int lcc = cc_red;
-    if (*u_metric == 'Y')
-    {
+    if (u_metric.equalsIgnoreCase("Y")){
       //C
       if (tempM < 26)
         lcc = cc_grn;
@@ -826,22 +823,23 @@ void draw_weather ()
         lcc = cc_blu;
       if (tempM < 6)
         lcc = cc_wht;
-    }
-    else
-    {
+    } else {
       //F
-      if (tempM < 79)
+      if (tempM < 79){
         lcc = cc_grn;
-      if (tempM < 64)
+      }
+      if (tempM < 64){
         lcc = cc_blu;
-      if (tempM < 43)
+      }
+      if (tempM < 43){
         lcc = cc_wht;
+      }
     }
     //
-    String lstr = String (tempM) + String((*u_metric=='Y')?"C":"F");
+    String lstr = String (tempM) + String((u_metric.equalsIgnoreCase("Y"))?"C":"F");
     Serial.print ("temperature: ");
     Serial.println (lstr);
-    TFDrawText (&display, lstr, xo, yo, lcc);
+    TFDrawText (&backgroundLayer, lstr, xo, yo, lcc);
     //weather conditions
     //-humidity
     lcc = cc_red;
@@ -853,16 +851,16 @@ void draw_weather ()
       lcc = cc_wht;
     lstr = String (humiM) + "%";
     xo = 8*TF_COLS;
-    TFDrawText (&display, lstr, xo, yo, lcc);
+    TFDrawText (&backgroundLayer, lstr, xo, yo, lcc);
     //-pressure
     lstr = String (presM);
     xo = 12*TF_COLS;
-    TFDrawText (&display, lstr, xo, yo, cc_blu);
+    TFDrawText (&backgroundLayer, lstr, xo, yo, cc_blu);
     //draw temp min/max
     if (tempMin > -10000)
     {
       xo = 0*TF_COLS; yo = 26;
-      TFDrawText (&display, "   ", xo, yo, 0);
+      TFDrawText (&backgroundLayer, "   ", xo, yo, 0);
       lstr = String (tempMin);// + String((*u_metric=='Y')?"C":"F");
       //blue if negative
       int ct = cc_dgr;
@@ -873,11 +871,11 @@ void draw_weather ()
       }
       Serial.print ("temp min: ");
       Serial.println (lstr);
-      TFDrawText (&display, lstr, xo, yo, ct);
+      TFDrawText (&backgroundLayer, lstr, xo, yo, ct);
     }
     if (tempMax > -10000)
     {
-      TFDrawText (&display, "   ", 13*TF_COLS, yo, 0);
+      TFDrawText (&backgroundLayer, "   ", 13*TF_COLS, yo, 0);
       //move the text to the right or left as needed
       xo = 14*TF_COLS; yo = 26;
       if (tempMax < 10)
@@ -894,7 +892,7 @@ void draw_weather ()
       }
       Serial.print ("temp max: ");
       Serial.println (lstr);
-      TFDrawText (&display, lstr, xo, yo, ct);
+      TFDrawText (&backgroundLayer, lstr, xo, yo, ct);
     }
     //weather conditions
     draw_weather_conditions ();
@@ -908,33 +906,34 @@ void draw_love ()
   //love*you,boo
   yo = 1;
   int cc = random (255, 65535);
-  xo  = 0; TFDrawChar (&display, 'L', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'O', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'V', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'E', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, ' ', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'h', xo, yo, display.color565 (255, 0, 0));
-  xo += 4; TFDrawChar (&display, 'i', xo, yo, display.color565 (255, 0, 0));
-  xo += 4; TFDrawChar (&display, ' ', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'Y', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'O', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'U', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, ',', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, ' ', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'B', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'O', xo, yo, cc); cc = random (255, 65535);
-  xo += 4; TFDrawChar (&display, 'O', xo, yo, cc); cc = random (255, 65535);
+  xo  = 0; TFDrawChar (&backgroundLayer, 'L', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'O', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'V', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'E', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, ' ', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'h', xo, yo, backgroundLayer.color565 (255, 0, 0));
+  xo += 4; TFDrawChar (&backgroundLayer, 'i', xo, yo, backgroundLayer.color565 (255, 0, 0));
+  xo += 4; TFDrawChar (&backgroundLayer, ' ', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'Y', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'O', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'U', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, ',', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, ' ', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'B', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'O', xo, yo, cc); cc = random (255, 65535);
+  xo += 4; TFDrawChar (&backgroundLayer, 'O', xo, yo, cc); cc = random (255, 65535);
 }
 //
 void draw_date ()
 {
-  int cc_grn = display.color565 (0, cin, 0);
+  int cc_grn = backgroundLayer.color565 (0, cin, 0);
   Serial.println ("showing the date");
   //for (int i = 0 ; i < 12; i++)
     //TFDrawChar (&display, '0' + i%10, xo + i * 5, yo, display.color565 (0, 255, 0));
   //date below the clock
   long tnow = now();
   String lstr = "";
+  // FIXME: date formatting sucks!
   for (int i = 0; i < 5; i += 2)
   {
     switch (date_fmt[i])
@@ -961,7 +960,7 @@ void draw_date ()
   {
     //
     xo = 3*TF_COLS; yo = 26;
-    TFDrawText (&display, lstr, xo, yo, cc_grn);
+    TFDrawText (&backgroundLayer, lstr, xo, yo, cc_grn);
   }
 }
 
@@ -1221,6 +1220,10 @@ void loop()
 	static int i = 0;
 	static int last = 0;
   static int cm;
+  
+  // update double reset detect
+  drd.loop();
+  
   //time changes every miliseconds, we only want to draw when digits actually change
   tnow = now ();
   //
@@ -1288,8 +1291,8 @@ void loop()
       daytime = 1;
     }
     //we had a sync so draw without morphing
-    int cc_gry = display.color565 (128, 128, 128);
-    int cc_dgr = display.color565 (30, 30, 30);
+    int cc_gry = backgroundLayer.color565 (128, 128, 128);
+    int cc_dgr = backgroundLayer.color565 (30, 30, 30);
     //dark blue is little visible on a dimmed screen
     //int cc_blu = display.color565 (0, 0, cin);
     int cc_col = cc_gry;
@@ -1304,7 +1307,7 @@ void loop()
     digit4.SetColor (cc_col);
     digit5.SetColor (cc_col);
     //clear screen
-    display.fillScreen (0);
+    backgroundLayer.fillScreen (0);
     //date and weather
     draw_weather ();
     draw_date ();
@@ -1312,7 +1315,7 @@ void loop()
     digit1.DrawColon (cc_col);
     digit3.DrawColon (cc_col);
     //military time?
-    if (hh > 12 && military[0] == 'N')
+    if (hh > 12 && military.equalsIgnoreCase("N"))
       hh -= 12;
     //
     digit0.Draw (ss % 10);

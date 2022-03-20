@@ -3,12 +3,12 @@
 
 #include <Arduino.h>
 
-#include <PxMatrix.h> // https://github.com/2dom/PxMatrix
+#include "Project_Matrix.h"
 
 class Digit {
   
   public:
-    Digit(PxMATRIX* d, byte value, uint16_t xo, uint16_t yo, uint16_t color);
+    Digit(Adafruit_GFX* d, byte value, uint16_t xo, uint16_t yo, uint16_t color);
     void Draw(byte value);
     void Morph(byte newValue);
     byte Value();
@@ -16,7 +16,7 @@ class Digit {
     void SetColor(uint16_t c);
     
   private:
-    PxMATRIX* _display;
+    Adafruit_GFX* _display;
     byte _value;
     uint16_t _color;
     uint16_t xOffset;

@@ -8,8 +8,7 @@
 #define TINYICONS_H
 
 #include <Arduino.h>
-#include <PxMatrix.h> // https://github.com/2dom/PxMatrix
-
+#include "Project_Matrix.h" 
 /*
  * icons set
  * 
@@ -317,7 +316,7 @@ void loop()
 *
 */
 
-void DrawIcon (PxMATRIX* d, int *ico, char xo, char yo, int cols, int rows);
+void DrawIcon (Adafruit_GFX* d, int *ico, char xo, char yo, int cols, int rows);
 
 #endif
 

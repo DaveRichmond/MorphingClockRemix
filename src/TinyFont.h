@@ -7,7 +7,7 @@
 #define TINYFONT_H
 
 #include <Arduino.h>
-#include <PxMatrix.h> // https://github.com/2dom/PxMatrix
+#include "Project_Matrix.h"
 
 #define TF_COLS 4
 #define TF_ROWS 5
@@ -24,7 +24,7 @@ struct TFFace
   xo += 5; TFDrawChar (&display, 'V', xo, yo, cc); cc = random (25, 65535);
   xo += 5; TFDrawChar (&display, 'E', xo, yo, cc); cc = random (25, 65535);
  */
-void TFDrawChar (PxMATRIX* d, char value, char xo, char yo, int col);
+void TFDrawChar (Adafruit_GFX* d, char value, char xo, char yo, int col);
 
 /*
  * example:
@@ -33,7 +33,7 @@ void TFDrawChar (PxMATRIX* d, char value, char xo, char yo, int col);
   xo = 1; yo = 1;
   TFDrawText (&display, lstr, xo, yo, cc_red);
  */
-void TFDrawText (PxMATRIX* d, String text, char xo, char yo, int col);
+void TFDrawText (Adafruit_GFX* d, String text, char xo, char yo, int col);
 
 #endif
 
