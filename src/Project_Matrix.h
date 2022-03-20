@@ -11,9 +11,15 @@
 
 const uint16_t kMatrixWidth = 64;
 const uint16_t kMatrixHeight = 32;
+const uint8_t kPanelType = SM_PANELTYPE_HUB75_32ROW_MOD16SCAN;
+
+// 32x16 matrix
+//const uint16_t kMatrixWidth = 32;
+//const uint16_t kMatrixHeight = 16;
+//const uint8_t kPanelType = SM_PANELTYPE_HUB75_16ROW_MOD8SCAN;
+
 const uint8_t kRefreshDepth = 36;
 const uint8_t kDmaBufferRows = 4;
-const uint8_t kPanelType = SM_PANELTYPE_HUB75_32ROW_MOD16SCAN;
 const uint32_t kMatrixOptions = (SM_HUB75_OPTIONS_NONE);
 const uint8_t kBackgroundLayerOptions = (SM_BACKGROUND_OPTIONS_NONE);
 

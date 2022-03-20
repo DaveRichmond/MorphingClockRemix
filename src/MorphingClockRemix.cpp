@@ -21,12 +21,13 @@ provided 'AS IS', use at your own risk
 //=== WIFI MANAGER ===
 //#include <DNSServer.h>
 //#include <ESP8266WebServer.h>
-#include <ESP_WiFiManager.h> //https://github.com/tzapu/WiFiManager
+#include <WiFiManager.h> //https://github.com/tzapu/WiFiManager
 String wifiManagerAPName = "MorphClk";
 String wifiManagerAPPassword = "MorphClk";
 
 //== DOUBLE-RESET DETECTOR ==
 #define DOUBLERESETDETECTOR_DEBUG       true
+//#define ESP_DRD_USE_SPIFFS true
 #include <ESP_DoubleResetDetector.h>
 #define DRD_TIMEOUT 10 // Second-reset must happen within 10 seconds of first reset to be considered a double-reset
 #define DRD_ADDRESS 0 // RTC Memory Address for the DoubleResetDetector to use
@@ -49,8 +50,6 @@ void saveConfigCallback ()
 SMARTMATRIX_ALLOCATE_BUFFERS(matrix, kMatrixWidth, kMatrixHeight, kRefreshDepth, kDmaBufferRows, kPanelType, kMatrixOptions);
 SMARTMATRIX_ALLOCATE_BACKGROUND_LAYER(backgroundLayer, kMatrixWidth, kMatrixHeight, COLOR_DEPTH, kBackgroundLayerOptions);
 
-
-
 //=== SEGMENTS ===
 int cin = 25; //color intensity
 #include "Digit.h"
@@ -67,29 +66,17 @@ void getWeather ();
 const byte row0 = 2+0*10;
 const byte row1 = 2+1*10;
 const byte row2 = 2+2*10;
-void configModeCallback (ESP_WiFiManager *myWiFiManager) 
+void configModeCallback (WiFiManager *myWiFiManager) 
 {
   Serial.println ("Entered config mode");
   //Serial.println (WiFi.softAPIP());
   myWiFiManager->startConfigPortal();
 
   // You could indicate on your screen or by an LED you are in config mode here
-  backgroundLayer.setCursor (0, row0);
-  backgroundLayer.print ("AP:");
-  backgroundLayer.print (myWiFiManager->getConfigPortalSSID());
-
-  backgroundLayer.setCursor (0, row1);
-  backgroundLayer.print ("Pw:");
-  backgroundLayer.print (myWiFiManager->getConfigPortalPW());
-
-  WiFi_AP_IPConfig ap_config;
-  myWiFiManager->getAPStaticIPConfig(ap_config);
-  backgroundLayer.setCursor (0, row2);
-  backgroundLayer.print (String(ap_config._ap_static_ip));
   
   backgroundLayer.fillScreen (backgroundLayer.color565(0, 0, 0));
 
-  // We don't want the next time the boar resets to be considered a double reset
+  // We don't want the next time the board resets to be considered a double reset
   // so we remove the flag
   drd.stop ();
 }
@@ -191,18 +178,18 @@ void wifi_setup ()
 
   //-- WiFiManager --
   //Local intialization. Once its business is done, there is no need to keep it around
-  ESP_WiFiManager wifiManager;
+  WiFiManager wifiManager;
   wifiManager.setSaveConfigCallback (saveConfigCallback);
-  ESP_WMParameter timeZoneParameter ("timeZone", "Time Zone", timezone.c_str(), 5); 
+  WiFiManagerParameter timeZoneParameter ("timeZone", "Time Zone", timezone.c_str(), 5); 
   wifiManager.addParameter (&timeZoneParameter);
-  ESP_WMParameter militaryParameter ("military", "24Hr (Y/N)", military.c_str(), 3); 
+  WiFiManagerParameter militaryParameter ("military", "24Hr (Y/N)", military.c_str(), 3); 
   wifiManager.addParameter (&militaryParameter);
-  ESP_WMParameter metricParameter ("metric", "Metric Units (Y/N)", u_metric.c_str(), 3); 
+  WiFiManagerParameter metricParameter ("metric", "Metric Units (Y/N)", u_metric.c_str(), 3); 
   wifiManager.addParameter (&metricParameter);
-  ESP_WMParameter dmydateParameter ("date_fmt", "Date Format (D.M.Y)", date_fmt.c_str(), 6); 
+  WiFiManagerParameter dmydateParameter ("date_fmt", "Date Format (D.M.Y)", date_fmt.c_str(), 6); 
   wifiManager.addParameter (&dmydateParameter);
 
-  if(wifiManager.WiFi_SSID().isEmpty()){
+  if(wifiManager.getWiFiSSID().isEmpty()){
     Serial.println("No WiFi SSID Set! Initial configuration mode");
     initial_config = true;
   }
@@ -212,25 +199,36 @@ void wifi_setup ()
     initial_config = true;
   }
 
+  Serial.println(wifiManager.getWLStatusString(WiFi.status()));
   if(initial_config){
     Serial.println("Initial configuration mode!");
+    backgroundLayer.setCursor (0, row0);
+    backgroundLayer.print ("AP:");
+    backgroundLayer.print (wifiManager.getConfigPortalSSID());
 
+    backgroundLayer.setCursor (0, row1);
+    backgroundLayer.print ("Pw:");
+    backgroundLayer.print (wifiManagerAPPassword);
+
+    backgroundLayer.setCursor (0, row2);
+    backgroundLayer.print (String(WiFi.localIP()));
+    backgroundLayer.swapBuffers();
     wifiManager.startConfigPortal (wifiManagerAPName.c_str(), wifiManagerAPPassword.c_str());
-
-  } 
-  else 
-  {
+  } else {
     Serial.println ("No Double Reset Detected");
-
-    //display.setCursor (2, row1);
-    //display.print ("connecting");
-    TFDrawText (&backgroundLayer, String("   CONNECTING   "), 0, 13, backgroundLayer.color565(0, 0, 255));
-
-    //fetches ssid and pass from eeprom and tries to connect
-    //if it does not connect it starts an access point with the specified name wifiManagerAPName
-    //and goes into a blocking loop awaiting configuration
-    wifiManager.autoConnect();
   }
+    //display.setCursor (2, row1);
+  //display.print ("connecting");
+  TFDrawText (&backgroundLayer, String("   CONNECTING   "), 0, 13, backgroundLayer.color565(0, 0, 255));
+  backgroundLayer.swapBuffers();
+
+  //fetches ssid and pass from eeprom and tries to connect
+  //if it does not connect it starts an access point with the specified name wifiManagerAPName
+  //and goes into a blocking loop awaiting configuration
+  Serial.println("Attempting to connect to");
+  Serial.println("SSID: " + String(wifiManager.getWiFiSSID()));
+  Serial.println("Password: " + String(wifiManager.getWiFiPass()));
+  wifiManager.autoConnect();
   
   Serial.print ("timezone=");
   Serial.println (timezone);
@@ -257,10 +255,13 @@ void wifi_setup ()
   TFDrawText (&backgroundLayer, String("     ONLINE     "), 0, 13, backgroundLayer.color565(0, 0, 255));
   Serial.print ("WiFi connected, IP address: ");
   Serial.println (WiFi.localIP ());
+  //Serial.println("Router: " + WiFi.gatewayIP());
   //
   //start NTP
+  Serial.println("Begin NTP");
   NTP.begin ("pool.ntp.org", timezone.toInt(), false);
   NTP.setInterval (10);//force rapid sync in 10sec
+  Serial.println("End NTP Start");
 
   if (shouldSaveConfig) 
   {
@@ -286,6 +287,7 @@ void setup()
   matrix.begin();
 
   matrix.setBrightness(defaultBrightness);
+  matrix.setRefreshRate(60);
   backgroundLayer.enableColorCorrection(true);
 
   //
@@ -1223,7 +1225,10 @@ void loop()
   
   // update double reset detect
   drd.loop();
+  backgroundLayer.startWrite();
   
+  //Serial.println("Matrix refresh rate: " + String(matrix.countFPS()));
+
   //time changes every miliseconds, we only want to draw when digits actually change
   tnow = now ();
   //
@@ -1339,6 +1344,8 @@ void loop()
       //refresh weather every 5mins at 30sec in the minute
       if (ss == 30 && ((mm % 5) == 0))
         getWeather ();
+      // show some serial details so we're alive
+      Serial.println(String(hh) + ":" + String(mm) + ":" + String(ss));
     }
     //minutes
     if (mm != prevmm)
@@ -1385,6 +1392,8 @@ void loop()
     //reset the sync interval if we're already in sync
     NTP.setInterval (3600 * 24);//re-sync once a day
   }
+
+  backgroundLayer.swapBuffers();
   //
 	//delay (0);
 }
