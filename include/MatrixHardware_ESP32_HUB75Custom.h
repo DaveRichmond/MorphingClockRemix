@@ -22,6 +22,7 @@
  */
 
  // Note: only one MatrixHardware_*.h file should be included per project
+ // This hardware file enables support for https://github.com/DaveRichmond/PCBs/tree/master/ESP32-D1Mini-HUB75
 
 #ifndef MATRIX_HARDWARE_H
 #define MATRIX_HARDWARE_H
