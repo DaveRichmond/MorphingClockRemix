@@ -10,6 +10,8 @@ provided 'AS IS', use at your own risk
 #include <TimeLib.h>
 #include <NtpClientLib.h>
 #include <SPIFFS.h>
+#include <Tasker.h>
+#include <array>
 
 //#define USE_ICONS
 //#define USE_FIREWORKS
@@ -53,12 +55,17 @@ SMARTMATRIX_ALLOCATE_BACKGROUND_LAYER(backgroundLayer, kMatrixWidth, kMatrixHeig
 //=== SEGMENTS ===
 int cin = 25; //color intensity
 #include "Digit.h"
+
 Digit digit0(&backgroundLayer, 0, 63 - 1 - 9*1, 8, backgroundLayer.color565(0, 0, 255));
 Digit digit1(&backgroundLayer, 0, 63 - 1 - 9*2, 8, backgroundLayer.color565(0, 0, 255));
 Digit digit2(&backgroundLayer, 0, 63 - 4 - 9*3, 8, backgroundLayer.color565(0, 0, 255));
 Digit digit3(&backgroundLayer, 0, 63 - 4 - 9*4, 8, backgroundLayer.color565(0, 0, 255));
 Digit digit4(&backgroundLayer, 0, 63 - 7 - 9*5, 8, backgroundLayer.color565(0, 0, 255));
 Digit digit5(&backgroundLayer, 0, 63 - 7 - 9*6, 8, backgroundLayer.color565(0, 0, 255));
+
+std::array<Digit, 6> digits = {
+  digit0, digit1, digit2, digit3, digit4, digit5
+};
 
 void getWeather ();
 
@@ -253,6 +260,7 @@ void wifi_setup ()
   //display.fillScreen (0);
   //display.setCursor (2, row1);
   TFDrawText (&backgroundLayer, String("     ONLINE     "), 0, 13, backgroundLayer.color565(0, 0, 255));
+  backgroundLayer.swapBuffers();
   Serial.print ("WiFi connected, IP address: ");
   Serial.println (WiFi.localIP ());
   //Serial.println("Router: " + WiFi.gatewayIP());
@@ -273,11 +281,72 @@ void wifi_setup ()
   getWeather ();
 }
 
-byte hh;
-byte mm;
-byte ss;
-byte ntpsync = 1;
+bool ntpsync = false; // do we have a sync to ntp?
 //
+
+Tasker task(true);
+
+// forward reference drawing functions
+void draw_date();
+void draw_weather();
+
+int prev_ss = 0;
+int prev_mm = 0;
+int prev_hh = 0;
+void updateScreen(void){
+  auto tnow = now();
+  auto ss = second(tnow);
+  auto mm = minute(tnow);
+  auto hh = hour(tnow);
+
+  if(military && hh >= 12){
+    hh -= 12;
+  }
+
+  
+  backgroundLayer.fillScreen(backgroundLayer.color565(0, 0, 0));
+  if(ntpsync){
+      if(ss != prev_ss){
+        digits[0].Morph(ss % 10);
+        digits[1].Morph(ss / 10);
+      }
+      if(mm != prev_mm){
+        digits[2].Morph(mm % 10);
+        digits[3].Morph(mm / 10);
+      }
+      if(hh != prev_hh){
+        digits[4].Morph(hh % 10);
+        digits[5].Morph(hh / 10);
+      }
+      prev_ss = ss;
+      prev_mm = mm;
+      prev_hh = hh;
+  } else {
+    if(ss != prev_ss){
+      digits[0].SetValue(ss % 10);
+      digits[1].SetValue(ss / 10);
+      prev_ss = ss;
+    }
+    if(mm != prev_mm){
+      digits[2].SetValue(mm % 10);
+      digits[3].SetValue(mm / 10);
+      prev_mm = mm;
+    }
+    if(hh != prev_hh){
+      digits[4].SetValue(hh % 10);
+      digits[5].SetValue(hh / 10);
+      prev_hh = hh;
+    }    
+  }
+
+  for(auto &digit : digits){
+    digit.Animate();
+  }
+  draw_weather();
+  draw_date();
+  backgroundLayer.swapBuffers();
+}
+
 void setup()
 {	
 	Serial.begin (115200);
@@ -311,17 +380,15 @@ void setup()
 		}
 	});
   //prep screen for clock display
-  backgroundLayer.fillScreen (0);
-  int cc_gry = backgroundLayer.color565 (128, 128, 128);
+  uint16_t cc_gry = backgroundLayer.color565 (128, 128, 128);
+
   //reset digits color
-  digit0.SetColor (cc_gry);
-  digit1.SetColor (cc_gry);
-  digit2.SetColor (cc_gry);
-  digit3.SetColor (cc_gry);
-  digit4.SetColor (cc_gry);
-  digit5.SetColor (cc_gry);
-  digit1.DrawColon (cc_gry);
-  digit3.DrawColon (cc_gry);
+
+  for(auto digit : digits){
+    digit.SetColor(cc_gry);
+  }
+  digits[1].SetColon (true);
+  digits[3].SetColon (true);
   //
   Serial.print ("display color range [");
   Serial.print (backgroundLayer.color565 (0, 0, 0));
@@ -329,6 +396,45 @@ void setup()
   Serial.print (backgroundLayer.color565 (255, 255, 255));
   Serial.println ("]");
   //
+
+  task.setInterval([](){
+     if (NTP.getInterval() < 3600 && year(now()) > 1970){
+      //reset the sync interval if we're already in sync 
+      NTP.setInterval (3600 * 24);//re-sync once a day
+    } 
+  }, 1000);
+
+  // task to set day/night time
+  task.setInterval([](){
+    if(!ntpsync){
+      return;
+    }
+    bool daytime = 0;
+    auto tnow = now();
+    auto hh = hour(tnow);
+    if(hh < 6 || hh > 20){
+      if(daytime){
+        Serial.println("Entering nighttime mode");
+      }
+      daytime = 0;
+    } else {
+      if(!daytime){
+        Serial.println("Entering daytime mode");
+      }
+      daytime = 1;
+    }
+
+    uint16_t cc_gry = backgroundLayer.color565 (128, 128, 128);
+    uint16_t cc_dgr = backgroundLayer.color565 (30, 30, 30);
+    for(auto &digit : digits){
+      if(daytime){
+        digit.SetColor(cc_gry);
+      } else {
+        digit.SetColor(cc_dgr);
+      }
+    }
+  }, 1000);
+  task.setInterval(updateScreen, (1000/20)); // 20Hz update
 }
 
 //open weather map api key 
@@ -804,13 +910,13 @@ void draw_weather ()
   //int cc_ylw = display.color565 (cin, cin, 0);
   //int cc_gry = display.color565 (128, 128, 128);
   int cc_dgr = backgroundLayer.color565 (30, 30, 30);
-  Serial.println ("showing the weather");
+  //Serial.println ("showing the weather");
   xo = 0; yo = 1;
   TFDrawText (&backgroundLayer, String("                "), xo, yo, cc_dgr);
   if (tempM == -10000 || humiM == -10000 || presM == -10000)
   {
-    //TFDrawText (&display, String("NO WEATHER DATA"), xo, yo, cc_dgr);
-    Serial.println ("!no weather data available");
+    TFDrawText (&backgroundLayer, String("NO WEATHER DATA"), xo, yo, cc_dgr);
+    //Serial.println ("!no weather data available");
   }
   else
   {
@@ -929,7 +1035,7 @@ void draw_love ()
 void draw_date ()
 {
   int cc_grn = backgroundLayer.color565 (0, cin, 0);
-  Serial.println ("showing the date");
+  //Serial.println ("showing the date");
   //for (int i = 0 ; i < 12; i++)
     //TFDrawChar (&display, '0' + i%10, xo + i * 5, yo, display.color565 (0, 255, 0));
   //date below the clock
@@ -1223,20 +1329,10 @@ void loop()
 	static int last = 0;
   static int cm;
   
+  task.loop();
+
   // update double reset detect
   drd.loop();
-  backgroundLayer.startWrite();
-  
-  //Serial.println("Matrix refresh rate: " + String(matrix.countFPS()));
-
-  //time changes every miliseconds, we only want to draw when digits actually change
-  tnow = now ();
-  //
-  hh = hour (tnow);   //NTP.getHour ();
-  mm = minute (tnow); //NTP.getMinute ();
-  ss = second (tnow); //NTP.getSecond ();
-  //animations?
-  cm = millis ();
   //
 #ifdef USE_FIREWORKS
   //fireworks on 1st of Jan 00:00, for 55 seconds
@@ -1256,7 +1352,7 @@ void loop()
     }
   }
 #endif //define USE_FIREWORKS
-
+/*
   //weather animations
   if ((cm - last) > 150)
   {
@@ -1267,10 +1363,10 @@ void loop()
     draw_animations (i);
     //
   }
-  //
+  
+  
   if (ntpsync)
   {
-    ntpsync = 0;
     //
     prevss = ss;
     prevmm = mm;
@@ -1386,15 +1482,6 @@ void loop()
       if (h1 != digit5.Value ()) digit5.Morph (h1);
     }//hh changed
   }
-  //set NTP sync interval as needed
-  if (NTP.getInterval() < 3600 && year(now()) > 1970)
-  {
-    //reset the sync interval if we're already in sync
-    NTP.setInterval (3600 * 24);//re-sync once a day
-  }
-
-  backgroundLayer.swapBuffers();
-  //
-	//delay (0);
+  */
 }
 
