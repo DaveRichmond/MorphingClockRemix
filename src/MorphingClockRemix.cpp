@@ -27,14 +27,6 @@ provided 'AS IS', use at your own risk
 String wifiManagerAPName = "MorphClk";
 String wifiManagerAPPassword = "MorphClk";
 
-//== DOUBLE-RESET DETECTOR ==
-#define DOUBLERESETDETECTOR_DEBUG       true
-//#define ESP_DRD_USE_SPIFFS true
-#include <ESP_DoubleResetDetector.h>
-#define DRD_TIMEOUT 10 // Second-reset must happen within 10 seconds of first reset to be considered a double-reset
-#define DRD_ADDRESS 0 // RTC Memory Address for the DoubleResetDetector to use
-DoubleResetDetector drd(DRD_TIMEOUT, DRD_ADDRESS);
-
 //== SAVING CONFIG ==
 #include "FS.h"
 #include <ArduinoJson.h>
@@ -82,10 +74,6 @@ void configModeCallback (WiFiManager *myWiFiManager)
   // You could indicate on your screen or by an LED you are in config mode here
   
   backgroundLayer.fillScreen (backgroundLayer.color565(0, 0, 0));
-
-  // We don't want the next time the board resets to be considered a double reset
-  // so we remove the flag
-  drd.stop ();
 }
 
 //char timezone[5] = "0";
@@ -163,9 +151,12 @@ bool saveConfig ()
   return true;
 }
 
+WiFiManager wifiManager;
 void wifi_setup ()
 {
   bool initial_config = false;
+
+  WiFi.mode(WIFI_MODE_STA); // defaults to STA+AP
 
   //-- Config --
   if (!SPIFFS.begin ()) 
@@ -184,8 +175,6 @@ void wifi_setup ()
   backgroundLayer.setTextColor (backgroundLayer.color565 (0, 0, 255));
 
   //-- WiFiManager --
-  //Local intialization. Once its business is done, there is no need to keep it around
-  WiFiManager wifiManager;
   wifiManager.setSaveConfigCallback (saveConfigCallback);
   WiFiManagerParameter timeZoneParameter ("timeZone", "Time Zone", timezone.c_str(), 5); 
   wifiManager.addParameter (&timeZoneParameter);
@@ -196,34 +185,44 @@ void wifi_setup ()
   WiFiManagerParameter dmydateParameter ("date_fmt", "Date Format (D.M.Y)", date_fmt.c_str(), 6); 
   wifiManager.addParameter (&dmydateParameter);
 
+  // once we connect, sync ntp and weather
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info){
+    //start NTP
+    Serial.println("Begin NTP");
+    NTP.begin ("pool.ntp.org", timezone.toInt(), false);
+    NTP.setInterval (10);//force rapid sync in 10sec
+    Serial.println("End NTP Start");
+
+    // synchronise weather
+    getWeather ();
+  }, SYSTEM_EVENT_STA_GOT_IP);
+
   if(wifiManager.getWiFiSSID().isEmpty()){
     Serial.println("No WiFi SSID Set! Initial configuration mode");
     initial_config = true;
   }
   //-- Double-Reset --
-  if (drd.detectDoubleReset ()) {
-    Serial.println ("Double Reset Detected");
-    initial_config = true;
-  }
+  //if (drd.detectDoubleReset ()) {
+  //  Serial.println ("Double Reset Detected");
+  //  initial_config = true;
+  //}
 
   Serial.println(wifiManager.getWLStatusString(WiFi.status()));
   if(initial_config){
     Serial.println("Initial configuration mode!");
     backgroundLayer.setCursor (0, row0);
     backgroundLayer.print ("AP:");
-    backgroundLayer.print (wifiManager.getConfigPortalSSID());
+    backgroundLayer.print (WiFi.softAPSSID());
 
     backgroundLayer.setCursor (0, row1);
     backgroundLayer.print ("Pw:");
     backgroundLayer.print (wifiManagerAPPassword);
 
     backgroundLayer.setCursor (0, row2);
-    backgroundLayer.print (String(WiFi.localIP()));
+    backgroundLayer.print (String(WiFi.softAPIP()));
     backgroundLayer.swapBuffers();
     wifiManager.startConfigPortal (wifiManagerAPName.c_str(), wifiManagerAPPassword.c_str());
-  } else {
-    Serial.println ("No Double Reset Detected");
-  }
+  } 
     //display.setCursor (2, row1);
   //display.print ("connecting");
   TFDrawText (&backgroundLayer, String("   CONNECTING   "), 0, 13, backgroundLayer.color565(0, 0, 255));
@@ -235,7 +234,7 @@ void wifi_setup ()
   Serial.println("Attempting to connect to");
   Serial.println("SSID: " + String(wifiManager.getWiFiSSID()));
   Serial.println("Password: " + String(wifiManager.getWiFiPass()));
-  wifiManager.autoConnect();
+  wifiManager.autoConnect(wifiManagerAPName.c_str(), wifiManagerAPPassword.c_str());
   
   Serial.print ("timezone=");
   Serial.println (timezone);
@@ -265,11 +264,6 @@ void wifi_setup ()
   Serial.println (WiFi.localIP ());
   //Serial.println("Router: " + WiFi.gatewayIP());
   //
-  //start NTP
-  Serial.println("Begin NTP");
-  NTP.begin ("pool.ntp.org", timezone.toInt(), false);
-  NTP.setInterval (10);//force rapid sync in 10sec
-  Serial.println("End NTP Start");
 
   if (shouldSaveConfig) 
   {
@@ -278,7 +272,6 @@ void wifi_setup ()
   //drd.stop ();
   
   //delay (1500);
-  getWeather ();
 }
 
 bool ntpsync = false; // do we have a sync to ntp?
@@ -307,16 +300,16 @@ void updateScreen(void){
   backgroundLayer.fillScreen(backgroundLayer.color565(0, 0, 0));
   if(ntpsync){
       if(ss != prev_ss){
-        digits[0].Morph(ss % 10);
-        digits[1].Morph(ss / 10);
+        digits[0].Morph(ss % 10, nullptr);
+        digits[1].Morph(ss / 10, nullptr);
       }
       if(mm != prev_mm){
-        digits[2].Morph(mm % 10);
-        digits[3].Morph(mm / 10);
+        digits[2].Morph(mm % 10, nullptr);
+        digits[3].Morph(mm / 10, nullptr);
       }
       if(hh != prev_hh){
-        digits[4].Morph(hh % 10);
-        digits[5].Morph(hh / 10);
+        digits[4].Morph(hh % 10, nullptr);
+        digits[5].Morph(hh / 10, nullptr);
       }
       prev_ss = ss;
       prev_mm = mm;
@@ -384,7 +377,7 @@ void setup()
 
   //reset digits color
 
-  for(auto digit : digits){
+  for(auto &digit : digits){
     digit.SetColor(cc_gry);
   }
   digits[1].SetColon (true);
@@ -403,6 +396,13 @@ void setup()
       NTP.setInterval (3600 * 24);//re-sync once a day
     } 
   }, 1000);
+
+  task.setInterval([](){
+    // once every 30 minutes, check the weather (but only if connected to the network)
+    if(WiFi.status() == WL_CONNECTED){
+      getWeather();
+    }
+  }, 30*60*1000);
 
   // task to set day/night time
   task.setInterval([](){
@@ -1330,10 +1330,8 @@ void loop()
   static int cm;
   
   task.loop();
+  wifiManager.process();
 
-  // update double reset detect
-  drd.loop();
-  //
 #ifdef USE_FIREWORKS
   //fireworks on 1st of Jan 00:00, for 55 seconds
   if (1 && (month (tnow) == 1 && day (tnow) == 1 && hh == 0 && mm == 0))

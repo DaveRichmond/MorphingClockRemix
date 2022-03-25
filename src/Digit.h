@@ -11,7 +11,7 @@ class Digit {
     Digit(Adafruit_GFX* d, byte value, uint16_t xo, uint16_t yo, uint16_t color);
     void Draw();
     void SetValue(byte value);
-    void Morph(byte newValue);
+    void Morph(byte newValue, void (*callback)(void)); // callback is called on end of animation
     byte Value();
     void DrawColon();
     void SetColor(uint16_t c);
@@ -24,6 +24,7 @@ class Digit {
     
   private:
     Adafruit_GFX* _display;
+    void (*_callback)(void);
     byte _value;
     byte _new_value;
     uint16_t _color;

@@ -66,7 +66,7 @@ void Digit::drawFillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_
 
 void Digit::SetColor(uint16_t c)
 {
-  Serial.println("Colour set to: " + String(c));
+  //Serial.println("Colour set to: " + String(c));
   _color = c;
 }
 void Digit::SetColon(bool c){
@@ -115,6 +115,10 @@ void Digit::StartAnimation(){
 }
 void Digit::EndAnimation(){
   Serial.println("Ending animation");
+  if(_callback != nullptr){
+    _callback();
+    _callback = nullptr; // cleanup callback
+  }
   _value = _new_value;
   animation_state = STATE_IDLE;
 }
@@ -122,9 +126,12 @@ void Digit::EndAnimation(){
 void Digit::Animate(){
   // FIXME
 
-  Draw();
-  if(animation_state == STATE_ANIMATION){
-    AnimateMorph();
+  switch(animation_state){
+    case STATE_ANIMATION:
+      AnimateMorph();
+      break;
+    default:
+      Draw();
   }
 
   if(_colon){
@@ -309,9 +316,10 @@ void Digit::Morph1() {
   }
 }
 
-void Digit::Morph(byte newValue){
+void Digit::Morph(byte newValue, void (*callback)(void)){
   if(_value != newValue){
     _new_value = newValue;
+    _callback = callback;
     StartAnimation();
   }
 }
